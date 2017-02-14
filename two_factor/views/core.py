@@ -360,6 +360,10 @@ class SetupView(IdempotentSessionWizardView):
             context.update({
                 'QR_URL': reverse(self.qrcode_url)
             })
+            if getattr(settings, 'TWO_FACTOR_SHOW_TOTP_KEY', False):
+                context.update({
+                    'TOTP_KEY': b32key
+                })
         elif self.steps.current == 'validation':
             context['device'] = self.get_device()
         context['cancel_url'] = resolve_url(settings.LOGIN_REDIRECT_URL)
