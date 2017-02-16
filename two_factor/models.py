@@ -117,10 +117,7 @@ class PhoneDevice(Device):
             send_sms(device=self, token=token)
 
 
-class TrustedComputer(models.Model):
-    user = models.ForeignKey(getattr(settings, 'AUTH_USER_MODEL', 'auth.User'),
-                             help_text="The user that this device belongs to.", on_delete=models.CASCADE)
-    name = models.CharField(max_length=64, help_text="The human-readable name of this device.")
+class TrustedComputer(Device):
     expire_date = models.DateTimeField()
     key = models.CharField(_('computer key'), max_length=40, db_index=True)
     
@@ -142,3 +139,6 @@ class TrustedComputer(models.Model):
 
     def exists(self, key):
         return self._meta.model.objects.filter(key=key).exists()
+
+    def is_interactive(self):
+        return False

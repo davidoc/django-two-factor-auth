@@ -29,6 +29,7 @@ from django.views.generic.base import View
 from django_otp.decorators import otp_required
 from django_otp.plugins.otp_static.models import StaticDevice, StaticToken
 from django_otp.util import random_hex
+from django_otp import DEVICE_ID_SESSION_KEY
 
 from two_factor import signals
 from two_factor.models import get_available_methods
@@ -116,13 +117,15 @@ class LoginView(IdempotentSessionWizardView):
 
             if 'trust-computer' in self.request.POST:
                 tc = self.trust_computer()
-                response.set_signed_cookie(cookie_name, tc.key, salt, max_age=max_age, httponly=True)
+                response.set_signed_cookie(cookie_name, tc.key, salt,
+                                           path=self.request.path, max_age=max_age, httponly=True)
             elif self.steps.current == 'token':
                 try:
                     trust_computer_cookie = self.request.get_signed_cookie(cookie_name, salt=salt, max_age=max_age)
                     tc = TrustedComputer.objects.get(user=user, expire_date__gt=_now, key=trust_computer_cookie)
                     if tc:
                         response = self.done(self.form_list)
+                        self.request.session[DEVICE_ID_SESSION_KEY] = tc.persistent_id
                 except (BadSignature, SignatureExpired, KeyError):
                     pass
                 except TrustedComputer.DoesNotExist:
