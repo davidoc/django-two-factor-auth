@@ -5,6 +5,7 @@
 # Additional runtime dependencies
 
 twilio
+user-agents
 
 # Example app
 
