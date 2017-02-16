@@ -6,17 +6,22 @@ from binascii import unhexlify
 import django_otp
 import qrcode
 import qrcode.image.svg
+from datetime import timedelta
+
+import user_agents
 from django.conf import settings
 from django.contrib.auth import REDIRECT_FIELD_NAME, login
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm
 from django.contrib.sites.shortcuts import get_current_site
+from django.core.signing import BadSignature, SignatureExpired
 from django.core.urlresolvers import reverse, reverse_lazy
 from django.forms import Form
 from django.http import Http404, HttpResponse
 from django.shortcuts import redirect, resolve_url
 from django.utils.http import is_safe_url
 from django.utils.module_loading import import_string
+from django.utils.timezone import now
 from django.views.decorators.cache import never_cache
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.generic import DeleteView, FormView, TemplateView
@@ -33,7 +38,7 @@ from ..forms import (
     AuthenticationTokenForm, BackupTokenForm, DeviceValidationForm, MethodForm,
     PhoneNumberForm, PhoneNumberMethodForm, TOTPDeviceForm, YubiKeyDeviceForm,
 )
-from ..models import PhoneDevice, get_available_phone_methods
+from ..models import PhoneDevice, get_available_phone_methods, TrustedComputer
 from ..utils import backup_phones, default_device, get_otpauth_url
 from .utils import IdempotentSessionWizardView, class_view_decorator
 
@@ -83,6 +88,9 @@ class LoginView(IdempotentSessionWizardView):
     }
     redirect_field_name = REDIRECT_FIELD_NAME
 
+    TRUST_COMPUTER = getattr(settings, 'TWO_FACTOR_TRUST_COMPUTER', False)
+    TRUST_COMPUTER_DAYS = getattr(settings, 'TWO_FACTOR_TRUST_COMPUTER_DAYS', 0)
+
     def __init__(self, **kwargs):
         super(LoginView, self).__init__(**kwargs)
         self.user_cache = None
@@ -97,7 +105,30 @@ class LoginView(IdempotentSessionWizardView):
         if 'challenge_device' in self.request.POST:
             return self.render_goto_step('token')
 
-        return super(LoginView, self).post(*args, **kwargs)
+        response = super(LoginView, self).post(*args, **kwargs)
+
+        if self.TRUST_COMPUTER:
+            max_age = self.TRUST_COMPUTER_DAYS * 24 * 60 * 60
+            _now = now()
+            user = self.get_user()
+            cookie_name = 'tftc'
+            salt = '{0}{1}'.format(cookie_name, user.id)
+
+            if 'trust-computer' in self.request.POST:
+                tc = self.trust_computer()
+                response.set_signed_cookie(cookie_name, tc.key, salt, max_age=max_age, httponly=True)
+            elif self.steps.current == 'token':
+                try:
+                    trust_computer_cookie = self.request.get_signed_cookie(cookie_name, salt=salt, max_age=max_age)
+                    tc = TrustedComputer.objects.get(user=user, expire_date__gt=_now, key=trust_computer_cookie)
+                    if tc:
+                        response = self.done(self.form_list)
+                except (BadSignature, SignatureExpired, KeyError):
+                    pass
+                except TrustedComputer.DoesNotExist:
+                    pass
+
+        return response
 
     def done(self, form_list, **kwargs):
         """
@@ -182,6 +213,11 @@ class LoginView(IdempotentSessionWizardView):
             except StaticDevice.DoesNotExist:
                 context['backup_tokens'] = 0
 
+        if getattr(settings, 'TWO_FACTOR_TRUST_COMPUTER', False):
+            days = getattr(settings, 'TWO_FACTOR_TRUST_COMPUTER_DAYS', 1)
+            context['trust_computer'] = True
+            context['trust_computer_days'] = days
+
         if getattr(settings, 'LOGOUT_REDIRECT_URL', None):
             context['cancel_url'] = resolve_url(settings.LOGOUT_REDIRECT_URL)
         elif getattr(settings, 'LOGOUT_URL', None):
@@ -191,6 +227,21 @@ class LoginView(IdempotentSessionWizardView):
                 DeprecationWarning)
             context['cancel_url'] = resolve_url(settings.LOGOUT_URL)
         return context
+
+    def trust_computer(self):
+        user = self.get_user()
+        expires = now() + timedelta(days=self.TRUST_COMPUTER_DAYS)
+        name = self._get_computer_name()
+
+        tc = TrustedComputer(user=user, name=name, expire_date=expires)
+        tc.save()
+        return tc
+
+    def _get_computer_name(self):
+        meta = self.request.META
+        ua = user_agents.parse(meta.get('HTTP_USER_AGENT'))
+        host = meta.get('REMOTE_HOST')
+        return '{0} {1} {2}'.format(ua.browser.family, ua.os.family, host)
 
 
 @class_view_decorator(never_cache)

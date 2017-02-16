@@ -26,6 +26,13 @@
   <form action="" method="post">{% csrf_token %}
     {% include "two_factor/_wizard_forms.html" %}
 
+    {% if trust_computer and wizard.steps.current == 'token' %}
+      <label>
+        {% blocktrans %}Remember this device for {{ trust_computer_days }} days{% endblocktrans %}
+        <input type="checkbox" name="trust-computer" value="value">
+      </label>
+    {% endif %}
+
     {# hidden submit button to enable [enter] key #}
     <div style="margin-left: -9999px"><input type="submit" value=""/></div>
 

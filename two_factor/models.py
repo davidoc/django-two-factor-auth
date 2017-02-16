@@ -5,6 +5,7 @@ from binascii import unhexlify
 
 from django.conf import settings
 from django.db import models
+from django.utils.crypto import get_random_string
 from django.utils.translation import ugettext_lazy as _
 from django_otp.models import Device
 from django_otp.oath import totp
@@ -114,3 +115,30 @@ class PhoneDevice(Device):
             make_call(device=self, token=token)
         else:
             send_sms(device=self, token=token)
+
+
+class TrustedComputer(models.Model):
+    user = models.ForeignKey(getattr(settings, 'AUTH_USER_MODEL', 'auth.User'),
+                             help_text="The user that this device belongs to.", on_delete=models.CASCADE)
+    name = models.CharField(max_length=64, help_text="The human-readable name of this device.")
+    expire_date = models.DateTimeField()
+    key = models.CharField(_('computer key'), max_length=40, db_index=True)
+    
+    def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
+        if not self._validate_computer_key(self.key):
+            self.key = self._get_new_computer_key()
+        super(TrustedComputer, self).save(force_insert, force_update, using, update_fields)
+
+    @staticmethod
+    def _validate_computer_key(key):
+        return key and len(key) > 8
+
+    def _get_new_computer_key(self):
+        while True:
+            computer_key = get_random_string(32)
+            if not self.exists(computer_key):
+                break
+        return computer_key
+
+    def exists(self, key):
+        return self._meta.model.objects.filter(key=key).exists()
